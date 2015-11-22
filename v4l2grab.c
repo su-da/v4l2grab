@@ -36,8 +36,7 @@ static void xioctl(int fh, int request, void *arg)
 
     do {
         r = v4l2_ioctl(fh, request, arg);
-    }
-    while (r == -1 && ((errno == EINTR) || (errno == EAGAIN)));
+    } while (r == -1 && ((errno == EINTR) || (errno == EAGAIN)));
 
     if (r == -1) {
         fprintf(stderr, "error %d, %s\n", errno, strerror(errno));
@@ -70,12 +69,17 @@ int main(int argc, char **argv)
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     fmt.fmt.pix.width = 640;
     fmt.fmt.pix.height = 480;
-    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB24;
-    fmt.fmt.pix.field = V4L2_FIELD_INTERLACED;
+    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_JPEG;
+    fmt.fmt.pix.field = V4L2_FIELD_NONE;
     xioctl(fd, VIDIOC_S_FMT, &fmt);
-    if (fmt.fmt.pix.pixelformat != V4L2_PIX_FMT_RGB24) {
-        printf("Libv4l didn't accept RGB24 format. Can't proceed.\n");
-        exit(EXIT_FAILURE);
+    if (fmt.fmt.pix.pixelformat != V4L2_PIX_FMT_JPEG) {
+        printf("Libv4l didn't accept JPEG format. Trying MJPEG format.\n");
+        fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_MJPEG;
+        xioctl(fd, VIDIOC_S_FMT, &fmt);
+        if (fmt.fmt.pix.pixelformat != V4L2_PIX_FMT_MJPEG) {
+            printf("Libv4l didn't accept MJPEG format. Can't proceed.\n");
+            exit(EXIT_FAILURE);
+        }
     }
     if ((fmt.fmt.pix.width != 640) || (fmt.fmt.pix.height != 480))
         printf("Warning: driver is sending image at %dx%d\n",
@@ -99,8 +103,7 @@ int main(int argc, char **argv)
 
         buffers[n_buffers].length = buf.length;
         buffers[n_buffers].start = v4l2_mmap(NULL, buf.length,
-                                             PROT_READ |
-                                             PROT_WRITE,
+                                             PROT_READ | PROT_WRITE,
                                              MAP_SHARED, fd, buf.m.offset);
 
         if (MAP_FAILED == buffers[n_buffers].start) {
@@ -129,8 +132,7 @@ int main(int argc, char **argv)
             tv.tv_usec = 0;
 
             r = select(fd + 1, &fds, NULL, NULL, &tv);
-        }
-        while ((r == -1 && (errno = EINTR)));
+        } while ((r == -1 && (errno = EINTR)));
         if (r == -1) {
             perror("select");
             return errno;
@@ -141,14 +143,12 @@ int main(int argc, char **argv)
         buf.memory = V4L2_MEMORY_MMAP;
         xioctl(fd, VIDIOC_DQBUF, &buf);
 
-        sprintf(out_name, "out%03d.ppm", i);
+        sprintf(out_name, "out%03d.jpg", i);
         fout = fopen(out_name, "w");
         if (!fout) {
             perror("Cannot open image");
             exit(EXIT_FAILURE);
         }
-        fprintf(fout, "P6\n%d %d 255\n",
-                fmt.fmt.pix.width, fmt.fmt.pix.height);
         fwrite(buffers[buf.index].start, buf.bytesused, 1, fout);
         fclose(fout);
 
