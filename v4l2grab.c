@@ -23,12 +23,20 @@
 #include <linux/videodev2.h>
 #include <libv4l2.h>
 
+#include <getopt.h>             /* getopt_long() */
+
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
 
 struct buffer {
     void *start;
     size_t length;
 };
+
+static void errno_exit(const char *s)
+{
+    fprintf(stderr, "%s error %d, %s\n", s, errno, strerror(errno));
+    exit(EXIT_FAILURE);
+}
 
 static void xioctl(int fh, int request, void *arg)
 {
@@ -44,6 +52,28 @@ static void xioctl(int fh, int request, void *arg)
     }
 }
 
+static void usage(FILE *fp, int argc, char **argv)
+{
+    fprintf(fp,
+            "Usage: %s [options]\n\n"
+            "Options:\n"
+            "-d | --device name   Video device name [/dev/video0]\n"
+            "-h | --help          Print this message\n"
+            "-c | --count         Number of frames to grab [3]\n"
+            "",
+            argv[0]);
+}
+
+static const char short_options[] = "d:hc:";
+
+static const struct option
+long_options[] = {
+        { "device", required_argument, NULL, 'd' },
+        { "help",   no_argument,       NULL, 'h' },
+        { "count",  required_argument, NULL, 'c' },
+        { 0, 0, 0, 0 }
+};
+
 int main(int argc, char **argv)
 {
     struct v4l2_format fmt;
@@ -58,6 +88,42 @@ int main(int argc, char **argv)
     char out_name[256];
     FILE *fout;
     struct buffer *buffers;
+    int frame_count = 3;
+
+    for (;;) {
+        int idx;
+        int c;
+
+        c = getopt_long(argc, argv,
+                        short_options, long_options, &idx);
+
+        if (-1 == c)
+            break;
+
+        switch (c) {
+        case 0: /* getopt_long() flag */
+            break;
+
+        case 'd':
+            dev_name = optarg;
+            break;
+
+        case 'h':
+            usage(stdout, argc, argv);
+            exit(EXIT_SUCCESS);
+
+        case 'c':
+            errno = 0;
+            frame_count = strtol(optarg, NULL, 0);
+            if (errno)
+                errno_exit(optarg);
+            break;
+
+        default:
+            usage(stderr, argc, argv);
+            exit(EXIT_FAILURE);
+        }
+    }
 
     fd = v4l2_open(dev_name, O_RDWR | O_NONBLOCK, 0);
     if (fd < 0) {
@@ -122,7 +188,7 @@ int main(int argc, char **argv)
     type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 
     xioctl(fd, VIDIOC_STREAMON, &type);
-    for (i = 0; i < 20; i++) {
+    for (i = 0; i < frame_count; i++) {
         do {
             FD_ZERO(&fds);
             FD_SET(fd, &fds);
