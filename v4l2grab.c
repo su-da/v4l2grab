@@ -25,6 +25,9 @@
 
 #include <getopt.h>             /* getopt_long() */
 
+#include "decoder.h"
+#include "decoder_mjpeg.h"
+
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
 
 struct buffer {
@@ -89,6 +92,9 @@ int main(int argc, char **argv)
     FILE *fout;
     struct buffer *buffers;
     int frame_count = 3;
+    unsigned char *out_buf = NULL;
+    Decoder *decoder = NULL;
+    int jpeg_size;
 
     for (;;) {
         int idx;
@@ -188,6 +194,7 @@ int main(int argc, char **argv)
     type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 
     xioctl(fd, VIDIOC_STREAMON, &type);
+    decoder = decoder_mjpeg_create();
     for (i = 0; i < frame_count; i++) {
         do {
             FD_ZERO(&fds);
@@ -201,6 +208,7 @@ int main(int argc, char **argv)
         } while ((r == -1 && (errno = EINTR)));
         if (r == -1) {
             perror("select");
+            decoder_destroy(decoder);
             return errno;
         }
 
@@ -215,12 +223,20 @@ int main(int argc, char **argv)
             perror("Cannot open image");
             exit(EXIT_FAILURE);
         }
-        fwrite(buffers[buf.index].start, buf.bytesused, 1, fout);
+        jpeg_size = 0;
+        jpeg_size = decoder_decode(decoder, &out_buf,
+                                   buffers[buf.index].start, buf.bytesused);
+        if ( jpeg_size > 0 ) {
+            fwrite(out_buf, jpeg_size, 1, fout);
+            free(out_buf);
+        } else
+            fwrite(buffers[buf.index].start, buf.bytesused, 1, fout);
         fclose(fout);
 
         xioctl(fd, VIDIOC_QBUF, &buf);
     }
 
+    decoder_destroy(decoder);
     type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     xioctl(fd, VIDIOC_STREAMOFF, &type);
     for (i = 0; i < n_buffers; ++i)

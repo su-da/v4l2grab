@@ -1,5 +1,6 @@
 MAINTARGET := v4l2grab
-SOURCE := v4l2grab.c
+SOURCE := v4l2grab.c decoder_mjpeg.c
+CFLAGS += -Wall
 LDFLAGS += -lv4l2
 OBJS := ${SOURCE:.c=.o}
 
