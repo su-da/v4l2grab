@@ -49,6 +49,8 @@ struct v4l2grabber {
     char *dev_name;
     int frame_count;
     int dry; /* 1 for display */
+    int pix_width;
+    int pix_height;
 
     int fd;
     Decoder *decoder; /* MJPEG to JPEG converter */
@@ -266,29 +268,33 @@ static int init_mmap(int fd, struct buffer **buffers)
     return n_buffers;
 }
 
-static void init_device(int fd, int width, int height)
+static void init_device(struct v4l2grabber *grabber)
 {
     struct v4l2_format fmt;
 
     CLEAR(fmt);
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    fmt.fmt.pix.width = width;
-    fmt.fmt.pix.height = height;
+    fmt.fmt.pix.width = grabber->pix_width;
+    fmt.fmt.pix.height = grabber->pix_height;
     fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_JPEG;
     fmt.fmt.pix.field = V4L2_FIELD_NONE;
-    xioctl(fd, VIDIOC_S_FMT, &fmt);
+    xioctl(grabber->fd, VIDIOC_S_FMT, &fmt);
     if (fmt.fmt.pix.pixelformat != V4L2_PIX_FMT_JPEG) {
         printf("Libv4l didn't accept JPEG format. Trying MJPEG format.\n");
         fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_MJPEG;
-        xioctl(fd, VIDIOC_S_FMT, &fmt);
+        xioctl(grabber->fd, VIDIOC_S_FMT, &fmt);
         if (fmt.fmt.pix.pixelformat != V4L2_PIX_FMT_MJPEG) {
             printf("Libv4l didn't accept MJPEG format. Can't proceed.\n");
             exit(EXIT_FAILURE);
         }
     }
-    if ((fmt.fmt.pix.width != 640) || (fmt.fmt.pix.height != 480))
+    if ((fmt.fmt.pix.width != grabber->pix_width)
+        || (fmt.fmt.pix.height != grabber->pix_height)) {
         printf("Warning: driver is sending image at %dx%d\n",
                fmt.fmt.pix.width, fmt.fmt.pix.height);
+        grabber->pix_width = fmt.fmt.pix.width;
+        grabber->pix_height = fmt.fmt.pix.height;
+    }
 }
 
 static void usage(FILE *fp, int argc, char **argv)
@@ -323,6 +329,8 @@ static void parse_options(int argc, char **argv, struct v4l2grabber *grabber)
     grabber->dev_name = "/dev/video0";
     grabber->frame_count = 3;
     grabber->dry = 0;
+    grabber->pix_width = IMG_DEFAULT_W;
+    grabber->pix_height = IMG_DEFAULT_H;
 
     for (;;) {
 
@@ -380,7 +388,7 @@ int main(int argc, char **argv)
         exit(EXIT_FAILURE);
     }
 
-    init_device(grabber.fd, IMG_DEFAULT_W, IMG_DEFAULT_H);
+    init_device(&grabber);
     n_buffers = init_mmap(grabber.fd, &buffers);
 
     type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -399,7 +407,8 @@ int main(int argc, char **argv)
         grabber.sdlWindow = SDL_CreateWindow("Video Show",
                                              SDL_WINDOWPOS_UNDEFINED,
                                              SDL_WINDOWPOS_UNDEFINED,
-                                             IMG_DEFAULT_W, IMG_DEFAULT_H, 0);
+                                             grabber.pix_width,
+                                             grabber.pix_height, 0);
         grabber.sdlRenderer = SDL_CreateRenderer(grabber.sdlWindow, -1, 0);
     }
 
