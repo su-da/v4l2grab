@@ -1,8 +1,13 @@
 MAINTARGET := v4l2grab
-SOURCE := v4l2grab.c decoder_mjpeg.c
-CFLAGS += -Wall -D_REENTRANT
-EXLDFLAGS += -lv4l2 -lSDL2 -lSDL2_image
+SOURCE := v4l2grab.c
+CFLAGS += -Wall
+EXLDFLAGS += -lv4l2
 OBJS := ${SOURCE:.c=.o}
+CC = $(CROSS_COMPILE)gcc
+ifdef CROSS_COMPILE
+    CFLAGS += --sysroot=$(SYSROOT)
+    EXLDFLAGS += --sysroot=$(SYSROOT)
+endif
 
 all: $(MAINTARGET)
 

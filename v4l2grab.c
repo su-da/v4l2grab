@@ -27,17 +27,10 @@
 
 #include <getopt.h>             /* getopt_long() */
 
-#include "decoder.h"
-#include "decoder_mjpeg.h"
-
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_image.h>
-
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
 
-#define TICK_INTERVAL    50
-#define IMG_DEFAULT_W   640
-#define IMG_DEFAULT_H   480
+#define IMG_DEFAULT_W   320
+#define IMG_DEFAULT_H   240
 
 struct buffer {
     void *start;
@@ -48,14 +41,10 @@ struct buffer {
 struct v4l2grabber {
     char *dev_name;
     int frame_count;
-    int dry; /* 1 for display */
     int pix_width;
     int pix_height;
 
     int fd;
-    Decoder *decoder; /* MJPEG to JPEG converter */
-    SDL_Window *sdlWindow;
-    SDL_Renderer *sdlRenderer;
 };
 
 static void errno_exit(const char *s)
@@ -78,87 +67,19 @@ static void xioctl(int fh, int request, void *arg)
     }
 }
 
-Uint32 TimeLeft(void)
-{
-    Uint32 next_tick = 0;
-    Uint32 cur_tick;
-
-    cur_tick = SDL_GetTicks();
-    if (next_tick <= cur_tick) {
-        next_tick = cur_tick + TICK_INTERVAL;
-        return 0;
-    } else {
-        return (next_tick - cur_tick);
-    }
-}
-
 static void uninit(struct v4l2grabber *grabber)
 {
-    decoder_destroy(grabber->decoder);
-    if (grabber->dry) {
-        SDL_DestroyRenderer(grabber->sdlRenderer);
-        SDL_DestroyWindow(grabber->sdlWindow);
-        IMG_Quit();
-        SDL_Quit();
-    }
 }
 
 static void process_image(const void *ptr, size_t size, int i)
 {
-    char out_name[256];
-    FILE *fout;
-
-    sprintf(out_name, "out%03d.jpg", i);
-    fout = fopen(out_name, "w");
-    if (!fout) {
-        perror("Cannot open image");
-        exit(EXIT_FAILURE);
-    }
-    fwrite(ptr, size, 1, fout);
-    fclose(fout);
-}
-
-static int display_image(SDL_RWops *buffer_stream, SDL_Renderer *sdlRenderer)
-{
-    SDL_Surface* picture;
-    SDL_Texture *texture;
-    SDL_Event event;
-    int quit = 0;
-
-    // Create a surface using the data coming out of the above stream.
-    picture = IMG_Load_RW(buffer_stream, 1);
-    texture = SDL_CreateTextureFromSurface(sdlRenderer, picture);
-    SDL_FreeSurface(picture);
-    SDL_RenderCopy(sdlRenderer, texture, NULL, NULL);
-    SDL_DestroyTexture(texture);
-    SDL_RenderPresent(sdlRenderer);
-    SDL_Delay(TimeLeft());
-
-    // event poll
-    SDL_PollEvent(&event);
-    switch (event.type) {
-    case SDL_KEYDOWN:
-    case SDL_KEYUP:
-        if (event.key.keysym.sym == SDLK_ESCAPE)
-            quit = 1;
-        break;
-    case SDL_QUIT:
-        quit = 1;
-        break;
-    default:
-        break;
-    }
-
-    return quit;
+    fwrite(ptr, size, 1, stdout);
 }
 
 static int read_frame(struct v4l2grabber *grabber,
                       struct buffer *buffers, int i)
 {
     struct v4l2_buffer buf;
-    int jpeg_size;
-    unsigned char *out_buf = NULL;
-    SDL_RWops* buffer_stream;
     int quit = 0;
 
     CLEAR(buf);
@@ -166,27 +87,7 @@ static int read_frame(struct v4l2grabber *grabber,
     buf.memory = V4L2_MEMORY_MMAP;
     xioctl(grabber->fd, VIDIOC_DQBUF, &buf);
 
-    jpeg_size = 0;
-    jpeg_size = decoder_decode(grabber->decoder, &out_buf,
-                               buffers[buf.index].start,
-                               buf.bytesused);
-    if (grabber->dry) {
-        // Create a stream based on our buffer.
-        if ( jpeg_size > 0 )
-            buffer_stream = SDL_RWFromMem(out_buf, jpeg_size);
-        else
-            buffer_stream = SDL_RWFromMem(buffers[buf.index].start,
-                                          buf.bytesused);
-
-        if (display_image(buffer_stream, grabber->sdlRenderer))
-            quit = 1;
-    } else {
-        if ( jpeg_size > 0 ) {
-            process_image(out_buf, jpeg_size, i);
-            free(out_buf);
-        } else
-            process_image(buffers[buf.index].start, buf.bytesused, i);
-    }
+    process_image(buffers[buf.index].start, buf.bytesused, i);
 
     xioctl(grabber->fd, VIDIOC_QBUF, &buf);
 
@@ -231,7 +132,7 @@ static int init_mmap(int fd, struct buffer **buffers)
     struct v4l2_buffer buf;
 
     CLEAR(req);
-    req.count = 2;
+    req.count = 1;
     req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     req.memory = V4L2_MEMORY_MMAP;
     xioctl(fd, VIDIOC_REQBUFS, &req);
@@ -257,6 +158,7 @@ static int init_mmap(int fd, struct buffer **buffers)
         }
     }
 
+    setvbuf(stdout, NULL, _IOFBF, buf.length * 3);
     for (i = 0; i < n_buffers; ++i) {
         CLEAR(buf);
         buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -276,21 +178,16 @@ static void init_device(struct v4l2grabber *grabber)
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     fmt.fmt.pix.width = grabber->pix_width;
     fmt.fmt.pix.height = grabber->pix_height;
-    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_JPEG;
+    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_UYVY;
     fmt.fmt.pix.field = V4L2_FIELD_NONE;
     xioctl(grabber->fd, VIDIOC_S_FMT, &fmt);
-    if (fmt.fmt.pix.pixelformat != V4L2_PIX_FMT_JPEG) {
-        printf("Libv4l didn't accept JPEG format. Trying MJPEG format.\n");
-        fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_MJPEG;
-        xioctl(grabber->fd, VIDIOC_S_FMT, &fmt);
-        if (fmt.fmt.pix.pixelformat != V4L2_PIX_FMT_MJPEG) {
-            printf("Libv4l didn't accept MJPEG format. Can't proceed.\n");
-            exit(EXIT_FAILURE);
-        }
+    if (fmt.fmt.pix.pixelformat != V4L2_PIX_FMT_UYVY) {
+        printf("Libv4l didn't accept UYVY format. Can't proceed.\n");
+        exit(EXIT_FAILURE);
     }
     if ((fmt.fmt.pix.width != grabber->pix_width)
         || (fmt.fmt.pix.height != grabber->pix_height)) {
-        printf("Warning: driver is sending image at %dx%d\n",
+        fprintf(stderr, "Warning: driver is sending image at %dx%d\n",
                fmt.fmt.pix.width, fmt.fmt.pix.height);
         grabber->pix_width = fmt.fmt.pix.width;
         grabber->pix_height = fmt.fmt.pix.height;
@@ -305,19 +202,18 @@ static void usage(FILE *fp, int argc, char **argv)
             "-d | --device name   Video device name [/dev/video0]\n"
             "-h | --help          Print this message\n"
             "-c | --count         Number of frames to grab [3]\n"
-            "-n | --dry           Don't save images but display them\n"
+            "Warning: image data will be sent to stdout.\n"
             "",
             argv[0]);
 }
 
-static const char short_options[] = "d:hc:n";
+static const char short_options[] = "d:hc:";
 
 static const struct option
 long_options[] = {
         { "device", required_argument, NULL, 'd' },
         { "help",   no_argument,       NULL, 'h' },
         { "count",  required_argument, NULL, 'c' },
-        { "dry",    no_argument,       NULL, 'n' },
         { 0, 0, 0, 0 }
 };
 
@@ -328,7 +224,6 @@ static void parse_options(int argc, char **argv, struct v4l2grabber *grabber)
 
     grabber->dev_name = "/dev/video0";
     grabber->frame_count = 3;
-    grabber->dry = 0;
     grabber->pix_width = IMG_DEFAULT_W;
     grabber->pix_height = IMG_DEFAULT_H;
 
@@ -357,10 +252,6 @@ static void parse_options(int argc, char **argv, struct v4l2grabber *grabber)
             grabber->frame_count = strtol(optarg, NULL, 0);
             if (errno)
                 errno_exit(optarg);
-            break;
-
-        case 'n':
-            grabber->dry = 1;
             break;
 
         default:
@@ -393,24 +284,6 @@ int main(int argc, char **argv)
 
     type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     xioctl(grabber.fd, VIDIOC_STREAMON, &type);
-
-    grabber.decoder = decoder_mjpeg_create();
-
-    /* initiate display */
-    if (grabber.dry) {
-        grabber.frame_count = INT_MAX;
-
-        // Initialise everything.
-        SDL_Init(SDL_INIT_VIDEO);
-        IMG_Init(IMG_INIT_JPG);
-
-        grabber.sdlWindow = SDL_CreateWindow("Video Show",
-                                             SDL_WINDOWPOS_UNDEFINED,
-                                             SDL_WINDOWPOS_UNDEFINED,
-                                             grabber.pix_width,
-                                             grabber.pix_height, 0);
-        grabber.sdlRenderer = SDL_CreateRenderer(grabber.sdlWindow, -1, 0);
-    }
 
     r = mainloop(&grabber, buffers);
 
